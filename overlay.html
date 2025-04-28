@@ -2,19 +2,83 @@
 <html>
 <meta charset="utf-8">
 <style>
-  html,body{margin:0;background:transparent;overflow:hidden;}
-  #dot{
-    position:fixed;
-    width:24px;height:24px;
-    border:2px solid #ff0000;border-radius:50%;
-    background:rgba(255,0,0,.15);
-    pointer-events:none;
+  html, body {
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
   }
-  canvas{position:fixed;left:0;top:0;pointer-events:none;}
+  
+  #dot {
+    position: fixed;
+    width: 24px;
+    height: 24px;
+    border: 2px solid #ff0000;
+    border-radius: 50%;
+    background: rgba(255, 0, 0, .15);
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  
+  #dot.occluded {
+    opacity: 0.3;
+    border-style: dashed;
+  }
+  
+  canvas {
+    position: fixed;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+  }
+  
+  .config-panel {
+    position: fixed;
+    right: 10px;
+    top: 10px;
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 10px;
+    border-radius: 5px;
+    font-family: sans-serif;
+    font-size: 12px;
+    z-index: 1000;
+    display: none;
+  }
+  
+  .config-panel.visible {
+    display: block;
+  }
+  
+  .config-panel input[type="range"] {
+    width: 100%;
+  }
+  
+  .config-panel label {
+    display: block;
+    margin-top: 5px;
+  }
 </style>
 <body>
   <canvas id="trail"></canvas>
   <div id="dot"></div>
+  
+  <div class="config-panel" id="configPanel">
+    <h3>Kalman Filter Settings</h3>
+    <label>
+      Process Noise: <span id="processNoiseVal">0.001</span>
+      <input type="range" id="processNoise" min="-5" max="0" step="0.1" value="-3">
+    </label>
+    <label>
+      Measurement Noise: <span id="measurementNoiseVal">0.1</span>
+      <input type="range" id="measurementNoise" min="-3" max="1" step="0.1" value="-1">
+    </label>
+    <label>
+      Max Occlusion Time: <span id="occlusionTimeVal">2.0</span>s
+      <input type="range" id="occlusionTime" min="0.1" max="5.0" step="0.1" value="2.0">
+    </label>
+    <button id="applyConfig">Apply</button>
+    <button id="closeConfig">Close</button>
+  </div>
 
 <script>
 /* ───── canvas setup ───── */
@@ -26,6 +90,7 @@ const ctx = cvs.getContext('2d');
 /* config */
 const RAW_COLOR = 'rgba(0,0,0,0.30)';   // grey (actual cursor)
 const KAL_COLOR = 'rgba(255,0,0,0.60)'; // red  (Kalman)
+const OCC_COLOR = 'rgba(255,0,0,0.30)'; // faded red (occluded)
 const MAX_POINTS = 250;                 // trail length ≈ 4 s
 
 const rawPts = [], kalPts = [];
@@ -35,9 +100,11 @@ function redraw(){
   ctx.clearRect(0,0,W,H);
   ctx.lineWidth = 2;
 
+  // Draw raw cursor trail
   ctx.beginPath(); ctx.strokeStyle = RAW_COLOR;
   rawPts.forEach((p,i)=> (i?ctx.lineTo(...p):ctx.moveTo(...p))); ctx.stroke();
 
+  // Draw Kalman-filtered trail
   ctx.beginPath(); ctx.strokeStyle = KAL_COLOR;
   kalPts.forEach((p,i)=> (i?ctx.lineTo(...p):ctx.moveTo(...p))); ctx.stroke();
 }
@@ -48,7 +115,7 @@ const dot = document.getElementById('dot');
 /* ───── Server-Sent Events ───── */
 const es = new EventSource(`${window.location.origin}/stream`);
 es.onmessage = ev => {
-  const {raw:[rx,ry], kal:[kx,ky]} = JSON.parse(ev.data);
+  const {raw:[rx,ry], kal:[kx,ky], occluded} = JSON.parse(ev.data);
 
   /* store trail points & repaint */
   push(rawPts, [rx,ry]); push(kalPts, [kx,ky]); redraw();
@@ -56,8 +123,82 @@ es.onmessage = ev => {
   /* move dot to Kalman-predicted pos */
   dot.style.left = kx + 'px';
   dot.style.top  = ky + 'px';
+  
+  /* Update dot appearance based on occlusion status */
+  if (occluded) {
+    dot.classList.add('occluded');
+  } else {
+    dot.classList.remove('occluded');
+  }
 };
 es.onerror = () => console.warn('SSE connection lost');
+
+/* ───── Keyboard shortcuts ───── */
+document.addEventListener('keydown', (e) => {
+  // Show config panel when pressing 'c'
+  if (e.key === 'c') {
+    const configPanel = document.getElementById('configPanel');
+    configPanel.classList.toggle('visible');
+    
+    // If opening, fetch current config from server
+    if (configPanel.classList.contains('visible')) {
+      fetchConfig();
+    }
+  }
+});
+
+/* ───── Configuration panel ───── */
+function fetchConfig() {
+  fetch('/config')
+    .then(response => response.json())
+    .then(data => {
+      document.getElementById('processNoise').value = Math.log10(data.process_noise);
+      document.getElementById('processNoiseVal').textContent = data.process_noise.toExponential(3);
+      
+      document.getElementById('measurementNoise').value = Math.log10(data.measurement_noise);
+      document.getElementById('measurementNoiseVal').textContent = data.measurement_noise.toExponential(3);
+      
+      document.getElementById('occlusionTime').value = data.max_occlusion_time;
+      document.getElementById('occlusionTimeVal').textContent = data.max_occlusion_time.toFixed(1);
+    });
+}
+
+// Update display values when sliders change
+document.getElementById('processNoise').addEventListener('input', function() {
+  const value = Math.pow(10, parseFloat(this.value));
+  document.getElementById('processNoiseVal').textContent = value.toExponential(3);
+});
+
+document.getElementById('measurementNoise').addEventListener('input', function() {
+  const value = Math.pow(10, parseFloat(this.value));
+  document.getElementById('measurementNoiseVal').textContent = value.toExponential(3);
+});
+
+document.getElementById('occlusionTime').addEventListener('input', function() {
+  document.getElementById('occlusionTimeVal').textContent = parseFloat(this.value).toFixed(1);
+});
+
+// Apply configuration
+document.getElementById('applyConfig').addEventListener('click', function() {
+  const config = {
+    process_noise: Math.pow(10, parseFloat(document.getElementById('processNoise').value)),
+    measurement_noise: Math.pow(10, parseFloat(document.getElementById('measurementNoise').value)),
+    max_occlusion_time: parseFloat(document.getElementById('occlusionTime').value)
+  };
+  
+  fetch('/config', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(config),
+  });
+});
+
+// Close config panel
+document.getElementById('closeConfig').addEventListener('click', function() {
+  document.getElementById('configPanel').classList.remove('visible');
+});
 </script>
 </body>
 </html>
