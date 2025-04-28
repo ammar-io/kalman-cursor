@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;background:transparent;overflow:hidden;}
+  #dot{
+    position:fixed;
+    width:24px;height:24px;
+    border:2px solid #ff0000;border-radius:50%;
+    background:rgba(255,0,0,.15);
+    pointer-events:none;
+  }
+  canvas{position:fixed;left:0;top:0;pointer-events:none;}
+</style>
+<body>
+  <canvas id="trail"></canvas>
+  <div id="dot"></div>
+
+<script>
+/* ───── canvas setup ───── */
+const W = window.innerWidth, H = window.innerHeight;
+const cvs = document.getElementById('trail');
+cvs.width = W; cvs.height = H;
+const ctx = cvs.getContext('2d');
+
+/* config */
+const RAW_COLOR = 'rgba(0,0,0,0.30)';   // grey (actual cursor)
+const KAL_COLOR = 'rgba(255,0,0,0.60)'; // red  (Kalman)
+const MAX_POINTS = 250;                 // trail length ≈ 4 s
+
+const rawPts = [], kalPts = [];
+function push(arr, pt){ arr.push(pt); if(arr.length>MAX_POINTS) arr.shift(); }
+
+function redraw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.lineWidth = 2;
+
+  ctx.beginPath(); ctx.strokeStyle = RAW_COLOR;
+  rawPts.forEach((p,i)=> (i?ctx.lineTo(...p):ctx.moveTo(...p))); ctx.stroke();
+
+  ctx.beginPath(); ctx.strokeStyle = KAL_COLOR;
+  kalPts.forEach((p,i)=> (i?ctx.lineTo(...p):ctx.moveTo(...p))); ctx.stroke();
+}
+
+/* ───── red dot element ───── */
+const dot = document.getElementById('dot');
+
+/* ───── Server-Sent Events ───── */
+const es = new EventSource(`${window.location.origin}/stream`);
+es.onmessage = ev => {
+  const {raw:[rx,ry], kal:[kx,ky]} = JSON.parse(ev.data);
+
+  /* store trail points & repaint */
+  push(rawPts, [rx,ry]); push(kalPts, [kx,ky]); redraw();
+
+  /* move dot to Kalman-predicted pos */
+  dot.style.left = kx + 'px';
+  dot.style.top  = ky + 'px';
+};
+es.onerror = () => console.warn('SSE connection lost');
+</script>
+</body>
+</html>
